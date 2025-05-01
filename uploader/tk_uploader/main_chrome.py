@@ -15,7 +15,7 @@ from utils.log import tiktok_logger
 
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(headless=True, channel="msedge")
         context = await browser.new_context(storage_state=account_file)
         context = await set_init_script(context)
         # 创建一个新的页面
@@ -58,7 +58,7 @@ async def get_tiktok_cookie(account_file):
             'headless': False,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await playwright.chromium.launch(**options, channel="msedge")
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         context = await set_init_script(context)
@@ -146,7 +146,7 @@ class TiktokVideo(object):
         await file_chooser.set_files(self.file_path)
 
     async def upload(self, playwright: Playwright) -> None:
-        browser = await playwright.chromium.launch(headless=False, executable_path=self.local_executable_path)
+        browser = await playwright.chromium.launch(headless=False, executable_path=self.local_executable_path, channel="msedge")
         context = await browser.new_context(storage_state=f"{self.account_file}")
         context = await set_init_script(context)
         page = await context.new_page()

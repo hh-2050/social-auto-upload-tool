@@ -13,7 +13,7 @@ from utils.log import kuaishou_logger
 
 async def cookie_auth(account_file):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(headless=True, channel="msedge")
         context = await browser.new_context(storage_state=account_file)
         context = await set_init_script(context)
         # 创建一个新的页面
@@ -49,7 +49,7 @@ async def get_ks_cookie(account_file):
             'headless': False,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await playwright.chromium.launch(**options, channel="msedge")
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         context = await set_init_script(context)
@@ -82,10 +82,12 @@ class KSVideo(object):
             browser = await playwright.chromium.launch(
                 headless=False,
                 executable_path=self.local_executable_path,
+                channel="msedge"
             )
         else:
             browser = await playwright.chromium.launch(
-                headless=False
+                headless=False,
+                channel="msedge"
             )  # 创建一个浏览器上下文，使用指定的 cookie 文件
         context = await browser.new_context(storage_state=f"{self.account_file}")
         context = await set_init_script(context)

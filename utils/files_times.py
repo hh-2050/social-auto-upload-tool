@@ -14,70 +14,73 @@ def get_absolute_path(relative_path: str, base_dir: str = None) -> str:
 
 def get_title_and_hashtags(filename):
     """
-  获取视频标题和 hashtag
-
-  Args:
-    filename: 视频文件名
-
-  Returns:
-    视频标题和 hashtag 列表
-  """
-
-    # 获取视频标题和 hashtag txt 文件名
+    获取短标题和标题+话题内容
+    Args:
+        filename: 视频文件名
+    Returns:
+        短标题, 标题和话题内容
+    """
     txt_filename = filename.replace(".mp4", ".txt")
-
-    # 读取 txt 文件
     with open(txt_filename, "r", encoding="utf-8") as f:
         content = f.read()
-
-    # 获取标题和 hashtag
-    splite_str = content.strip().split("\n")
-    title = splite_str[0]
-    hashtags = splite_str[1].replace("#", "").split(" ")
-
-    return title, hashtags
+    lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+    if not lines:
+        return '', ''
+    short_title = lines[0]
+    title_and_tags = "\n".join(lines[1:]) if len(lines) > 1 else ''
+    return short_title, title_and_tags
 
 
 def generate_schedule_time_next_day(total_videos, videos_per_day, daily_times=None, timestamps=False, start_days=0):
     """
-    Generate a schedule for video uploads, starting from the next day.
-
+    Generate a schedule for video uploads, starting from a specified day at fixed times.
+    
     Args:
-    - total_videos: Total number of videos to be uploaded.
-    - videos_per_day: Number of videos to be uploaded each day.
-    - daily_times: Optional list of specific times of the day to publish the videos.
-    - timestamps: Boolean to decide whether to return timestamps or datetime objects.
-    - start_days: Start from after start_days.
-
+        total_videos (int): Total number of videos to schedule
+        videos_per_day (int): Number of videos to publish per day
+        daily_times (list): List of hours when videos should be published (default: [6, 9, 12, 15, 18, 21])
+        timestamps (bool): Whether to return timestamps instead of datetime objects
+        start_days (int): Number of days to offset from tomorrow (0 means tomorrow, 1 means day after tomorrow, etc.)
+    
     Returns:
-    - A list of scheduling times for the videos, either as timestamps or datetime objects.
+        list: List of datetime objects or timestamps for scheduled uploads
     """
+    from datetime import time, datetime, timedelta
+
     if videos_per_day <= 0:
         raise ValueError("videos_per_day should be a positive integer")
 
     if daily_times is None:
-        # Default times to publish videos if not provided
-        daily_times = [6, 11, 14, 16, 22]
-
+        daily_times = [6, 9, 12, 15, 18, 21]  # Default publish times
+    
     if videos_per_day > len(daily_times):
         raise ValueError("videos_per_day should not exceed the length of daily_times")
 
-    # Generate timestamps
+    # Sort daily times to ensure chronological order
+    daily_times.sort()
+    
+    # Calculate start date (tomorrow + offset days)
+    start_date = datetime.now().date() + timedelta(days=1 + start_days)
+    
+    # Calculate how many days we need based on total videos and videos per day
+    total_days = (total_videos + videos_per_day - 1) // videos_per_day
+    
     schedule = []
-    current_time = datetime.now()
-
-    for video in range(total_videos):
-        day = video // videos_per_day + start_days + 1  # +1 to start from the next day
-        daily_video_index = video % videos_per_day
-
-        # Calculate the time for the current video
-        hour = daily_times[daily_video_index]
-        time_offset = timedelta(days=day, hours=hour - current_time.hour, minutes=-current_time.minute,
-                                seconds=-current_time.second, microseconds=-current_time.microsecond)
-        timestamp = current_time + time_offset
-
-        schedule.append(timestamp)
+    current_date = start_date
+    videos_scheduled = 0
+    
+    # Generate schedule for each day until we have enough slots for all videos
+    for day in range(total_days):
+        # For each day, take only the first videos_per_day time slots
+        day_times = daily_times[:videos_per_day]
+        for hour in day_times:
+            if videos_scheduled < total_videos:
+                schedule_time = datetime.combine(current_date, time(hour=hour))
+                schedule.append(schedule_time)
+                videos_scheduled += 1
+        current_date += timedelta(days=1)
 
     if timestamps:
-        schedule = [int(time.timestamp()) for time in schedule]
+        schedule = [int(dt.timestamp()) for dt in schedule]
+    
     return schedule

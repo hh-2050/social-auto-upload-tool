@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from playwright.async_api import Playwright, async_playwright
 import os
@@ -13,19 +13,17 @@ from utils.log import tencent_logger
 
 def format_str_for_short_title(origin_title: str) -> str:
     # 定义允许的特殊字符
-    allowed_special_chars = "《》“”:+?%°"
+    allowed_special_chars = "《》""+?%°"
 
     # 移除不允许的特殊字符
     filtered_chars = [char if char.isalnum() or char in allowed_special_chars else ' ' if char == ',' else '' for
                       char in origin_title]
     formatted_string = ''.join(filtered_chars)
 
-    # 调整字符串长度
+    # 视频号短标题要求至少6个字，不足补空格，超出截断
     if len(formatted_string) > 16:
-        # 截断字符串
         formatted_string = formatted_string[:16]
-    elif len(formatted_string) < 6:
-        # 使用空格来填充字符串
+    if len(formatted_string) < 6:
         formatted_string += ' ' * (6 - len(formatted_string))
 
     return formatted_string
@@ -58,7 +56,7 @@ async def get_tencent_cookie(account_file):
             'headless': False,  # Set headless option here
         }
         # Make sure to run headed.
-        browser = await playwright.chromium.launch(**options)
+        browser = await playwright.chromium.launch(**options, channel="msedge")
         # Setup context however you like.
         context = await browser.new_context()  # Pass any options
         # Pause the page, and start recording manually.
@@ -82,10 +80,10 @@ async def weixin_setup(account_file, handle=False):
 
 
 class TencentVideo(object):
-    def __init__(self, title, file_path, tags, publish_date: datetime, account_file, category=None):
-        self.title = title  # 视频标题
+    def __init__(self, short_title, title_and_tags, file_path, publish_date: datetime, account_file, category=None):
+        self.short_title = short_title  # 短标题
+        self.title_and_tags = title_and_tags  # 标题和话题内容
         self.file_path = file_path
-        self.tags = tags
         self.publish_date = publish_date
         self.account_file = account_file
         self.category = category
@@ -118,13 +116,29 @@ class TencentVideo(object):
                 await element.click()
                 break
 
-        # 输入小时部分（假设选择11小时）
+        # 选择时间（鼠标点选小时和分钟）
         await page.click('input[placeholder="请选择时间"]')
-        await page.keyboard.press("Control+KeyA")
-        await page.keyboard.type(str(publish_date.hour))
-
-        # 选择标题栏（令定时时间生效）
-        await page.locator("div.input-editor").click()
+        await page.wait_for_selector('ol.weui-desktop-picker__time__hour', timeout=3000)
+        # 点击目标小时
+        hour_str = f"{publish_date.hour:02d}"
+        hour_ol = page.locator('ol.weui-desktop-picker__time__hour')
+        hour_count = await hour_ol.locator('li').count()
+        for i in range(hour_count):
+            li = hour_ol.locator('li').nth(i)
+            if await li.inner_text() == hour_str:
+                await li.click()
+                break
+        # 点击目标分钟
+        minute_str = f"{publish_date.minute:02d}"
+        minute_ol = page.locator('ol.weui-desktop-picker__time__minute')
+        minute_count = await minute_ol.locator('li').count()
+        for i in range(minute_count):
+            li = minute_ol.locator('li').nth(i)
+            if await li.inner_text() == minute_str:
+                await li.click()
+                break
+        # 点击空白处，令选择生效
+        await page.click("body")
 
     async def handle_upload_error(self, page):
         tencent_logger.info("视频出错了，重新上传中")
@@ -133,9 +147,119 @@ class TencentVideo(object):
         file_input = page.locator('input[type="file"]')
         await file_input.set_input_files(self.file_path)
 
+    async def upload_cover_image(self, page):
+        # 获取视频文件名（不含扩展名）
+        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        # 支持多种封面图片格式，按优先级顺序查找
+        exts = [".png", ".jpeg", ".jpg", ".webp"]
+        cover_path = None
+        for ext in exts:
+            candidate = os.path.join(os.path.dirname(self.file_path), f"{base_name}{ext}")
+            if os.path.exists(candidate):
+                cover_path = candidate
+                break
+        if not cover_path:
+            tencent_logger.info(f"未找到封面图片: {base_name}.[png/jpeg/jpg/webp]")
+            return
+        try:
+            # 等待"更换封面"按钮可点击（非灰色/非disabled），最多等待60秒
+            btn_selector = 'div.finder-tag-wrap.btn .tag-inner:text("更换封面")'
+            max_wait = 60
+            for i in range(max_wait):
+                btn = await page.query_selector(btn_selector)
+                if btn:
+                    btn_class = await btn.evaluate('el => el.parentElement.className')
+                    if 'disabled' not in btn_class and 'is-disabled' not in btn_class:
+                        break
+                await asyncio.sleep(1)
+            else:
+                tencent_logger.error("更换封面按钮长时间不可用，放弃上传封面")
+                return
+            # 1. 点击"更换封面"按钮
+            await btn.click()
+            try:
+                await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
+            except Exception:
+                tencent_logger.warning("首次点击更换封面后未弹出弹窗，尝试再次点击...")
+                await btn.click()
+                await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
+            # 2. 上传封面图片
+            input_elem = await page.query_selector('div.single-cover-uploader-wrap input[type="file"]')
+            if input_elem is None:
+                tencent_logger.error("未找到用于封面的文件选择框")
+                return
+            await input_elem.set_input_files(cover_path)
+            tencent_logger.info(f"已上传封面图片: {cover_path}")
+            # 3. 在所有可见弹窗内，遍历所有按钮，遇到"确认"按钮就点击（裁剪弹窗）
+            confirm_clicked = False
+            for wait_idx in range(30):  # 最多等待30秒
+                dialog_wrps = await page.query_selector_all('div.weui-desktop-dialog__wrp:not([style*="display: none"])')
+                for wrp in dialog_wrps:
+                    btns = await wrp.query_selector_all('button')
+                    btn_texts = []
+                    for btn in btns:
+                        try:
+                            text = await btn.inner_text()
+                        except Exception:
+                            text = ""
+                        btn_texts.append(text)
+                        if text.strip() == "确定":  # 裁剪弹窗的确认按钮通常为“确定”
+                            visible = await btn.is_visible()
+                            disabled = await btn.get_attribute('disabled')
+                            if visible and not disabled:
+                                await btn.click()
+                                tencent_logger.info("已点击裁剪弹窗确认按钮")
+                                await asyncio.sleep(1)
+                                confirm_clicked = True
+                                break
+                    tencent_logger.info(f"弹窗按钮: {btn_texts}")
+                    if confirm_clicked:
+                        break
+                if confirm_clicked:
+                    break
+                await asyncio.sleep(1)
+            else:
+                tencent_logger.error("未找到可见的裁剪弹窗确认按钮或按钮长时间不可用")
+                return
+            # 新增：处理悬浮层的“确认”按钮
+            for wait_idx in range(10):  # 最多等待10秒
+                dialog_wrps = await page.query_selector_all('div.weui-desktop-dialog__wrp:not([style*="display: none"])')
+                for wrp in dialog_wrps:
+                    btns = await wrp.query_selector_all('button')
+                    for btn in btns:
+                        try:
+                            text = await btn.inner_text()
+                        except Exception:
+                            text = ""
+                        if text.strip() == "确认":  # 悬浮层的确认按钮
+                            visible = await btn.is_visible()
+                            disabled = await btn.get_attribute('disabled')
+                            if visible and not disabled:
+                                await btn.click()
+                                tencent_logger.info("已点击悬浮层确认按钮")
+                                await asyncio.sleep(1)
+                                return
+                await asyncio.sleep(1)
+            tencent_logger.error("未找到悬浮层确认按钮")
+            return
+        except Exception as e:
+            tencent_logger.error(f"上传封面图片失败: {e}")
+
+    async def set_no_location(self, page):
+        try:
+            # 1. 点击"位置"区域，弹出下拉框
+            await page.click('div.label:has-text("位置") + div .position-display-wrap')
+            await page.wait_for_timeout(500)  # 等待下拉框弹出
+            # 2. 点击"不显示位置"选项
+            await page.wait_for_selector('div.common-option-list-wrap', timeout=2000)
+            await page.click('div.option-item .name:text("不显示位置")')
+            tencent_logger.info("已设置为不显示位置")
+        except Exception as e:
+            tencent_logger.error(f"设置不显示位置失败: {e}")
+
     async def upload(self, playwright: Playwright) -> None:
         # 使用 Chromium (这里使用系统内浏览器，用chromium 会造成h264错误
-        browser = await playwright.chromium.launch(headless=False, executable_path=self.local_executable_path)
+        browser = await playwright.chromium.launch(headless=False, executable_path=self.local_executable_path, channel="msedge")
         # 创建一个浏览器上下文，使用指定的 cookie 文件
         context = await browser.new_context(storage_state=f"{self.account_file}")
         context = await set_init_script(context)
@@ -144,12 +268,14 @@ class TencentVideo(object):
         page = await context.new_page()
         # 访问指定的 URL
         await page.goto("https://channels.weixin.qq.com/platform/post/create")
-        tencent_logger.info(f'[+]正在上传-------{self.title}.mp4')
+        tencent_logger.info(f'[+]正在上传-------{self.title_and_tags}.mp4')
         # 等待页面跳转到指定的 URL，没进入，则自动等待到超时
         await page.wait_for_url("https://channels.weixin.qq.com/platform/post/create")
         # await page.wait_for_selector('input[type="file"]', timeout=10000)
         file_input = page.locator('input[type="file"]')
         await file_input.set_input_files(self.file_path)
+        # 检查上传状态，失败自动重试
+        await self.detect_upload_status(page)
         # 填充标题和话题
         await self.add_title_tags(page)
         # 添加商品
@@ -158,13 +284,18 @@ class TencentVideo(object):
         await self.add_collection(page)
         # 原创选择
         await self.add_original(page)
-        # 检测上传状态
-        await self.detect_upload_status(page)
-        if self.publish_date != 0:
-            await self.set_schedule_time_tencent(page, self.publish_date)
+        # 设置不显示位置
+        await self.set_no_location(page)
+        # 默认定时发布：无论publish_date是否为0都定时，若为0则设为次日9点
+        if not self.publish_date or self.publish_date == 0:
+            now = datetime.now()
+            self.publish_date = now.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        await self.set_schedule_time_tencent(page, self.publish_date)
         # 添加短标题
         await self.add_short_title(page)
-
+        # 上传同名封面图片（放到最后，确保视频解析完成后再操作）
+        await self.upload_cover_image(page)
+        # 点击发表
         await self.click_publish(page)
 
         await context.storage_state(path=f"{self.account_file}")  # 保存cookie
@@ -174,13 +305,16 @@ class TencentVideo(object):
         await context.close()
         await browser.close()
 
+    async def add_title_tags(self, page):
+        await page.locator("div.input-editor").click()
+        await page.keyboard.type(self.title_and_tags)
+        tencent_logger.info("已填写标题和话题")
+
     async def add_short_title(self, page):
-        short_title_element = page.get_by_text("短标题", exact=True).locator("..").locator(
-            "xpath=following-sibling::div").locator(
-            'span input[type="text"]')
+        short_title_element = page.get_by_text("短标题", exact=True).locator("..") \
+            .locator("xpath=following-sibling::div").locator('span input[type="text"]')
         if await short_title_element.count():
-            short_title = format_str_for_short_title(self.title)
-            await short_title_element.fill(short_title)
+            await short_title_element.fill(self.short_title)
 
     async def click_publish(self, page):
         while True:
@@ -202,41 +336,32 @@ class TencentVideo(object):
                     await asyncio.sleep(0.5)
 
     async def detect_upload_status(self, page):
+        retry_count = 0
+        max_retries = 3
         while True:
-            # 匹配删除按钮，代表视频上传完毕，如果不存在，代表视频正在上传，则等待
             try:
                 # 匹配删除按钮，代表视频上传完毕
-                if "weui-desktop-btn_disabled" not in await page.get_by_role("button", name="发表").get_attribute(
-                        'class'):
+                if "weui-desktop-btn_disabled" not in await page.get_by_role("button", name="发表").get_attribute('class'):
                     tencent_logger.info("  [-]视频上传完毕")
                     break
                 else:
                     tencent_logger.info("  [-] 正在上传视频中...")
                     await asyncio.sleep(2)
                     # 出错了视频出错
-                    if await page.locator('div.status-msg.error').count() and await page.locator(
-                            'div.media-status-content div.tag-inner:has-text("删除")').count():
-                        tencent_logger.error("  [-] 发现上传出错了...准备重试")
+                    if await page.locator('div.status-msg.error').count() and await page.locator('div.media-status-content div.tag-inner:has-text("删除")').count():
+                        retry_count += 1
+                        if retry_count > max_retries:
+                            tencent_logger.error(f"  [-] 上传失败已达最大重试次数（{max_retries}次），终止流程。")
+                            raise Exception("视频上传失败，重试次数过多，已终止。")
+                        tencent_logger.error(f"  [-] 发现上传出错了...准备重试（第{retry_count}次）")
                         await self.handle_upload_error(page)
-            except:
-                tencent_logger.info("  [-] 正在上传视频中...")
+            except Exception as e:
+                tencent_logger.info(f"  [-] 正在上传视频中...（异常：{e}）")
                 await asyncio.sleep(2)
 
-    async def add_title_tags(self, page):
-        await page.locator("div.input-editor").click()
-        await page.keyboard.type(self.title)
-        await page.keyboard.press("Enter")
-        for index, tag in enumerate(self.tags, start=1):
-            await page.keyboard.type("#" + tag)
-            await page.keyboard.press("Space")
-        tencent_logger.info(f"成功添加hashtag: {len(self.tags)}")
-
     async def add_collection(self, page):
-        collection_elements = page.get_by_text("添加到合集").locator("xpath=following-sibling::div").locator(
-            '.option-list-wrap > div')
-        if await collection_elements.count() > 1:
-            await page.get_by_text("添加到合集").locator("xpath=following-sibling::div").click()
-            await collection_elements.first.click()
+        # 默认不添加合集，直接跳过
+        return
 
     async def add_original(self, page):
         if await page.get_by_label("视频为原创").count():
