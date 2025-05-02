@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime, timedelta
 
-from playwright.async_api import Playwright, async_playwright
+from playwright.async_api import Playwright, async_playwright, Page # 在这里添加 Page
 import os
 import asyncio
 
@@ -12,20 +12,29 @@ from utils.log import tencent_logger
 
 
 def format_str_for_short_title(origin_title: str) -> str:
-    # 定义允许的特殊字符
-    allowed_special_chars = "《》""+?%°"
+    # 定义允许的特殊字符 (根据用户描述更新)
+    # 书名号《》, 引号", 冒号：, 加号+, 问号?, 百分号%, 摄氏度°
+    allowed_special_chars = '《》":+?%°' # 更新：添加冒号，修正引号表示
 
-    # 移除不允许的特殊字符
-    filtered_chars = [char if char.isalnum() or char in allowed_special_chars else ' ' if char == ',' else '' for
-                      char in origin_title]
+    # 重写过滤逻辑以提高清晰度并处理两种逗号
+    filtered_chars = []
+    for char in origin_title:
+        if char.isalnum() or char in allowed_special_chars:
+            filtered_chars.append(char)
+        elif char == ',' or char == '，': # 处理英文和中文逗号
+            filtered_chars.append(' ')
+        # 其他所有不符合条件的字符（包括不允许的符号和Emoji）会被自动忽略
+
     formatted_string = ''.join(filtered_chars)
 
     # 视频号短标题要求至少6个字，不足补空格，超出截断
     if len(formatted_string) > 16:
         formatted_string = formatted_string[:16]
+    # 在截断后检查长度是否小于6
     if len(formatted_string) < 6:
-        formatted_string += ' ' * (6 - len(formatted_string))
+        formatted_string += ' ' * (6 - len(formatted_string)) # 补空格
 
+    # 返回处理后的字符串，平台通常会自动处理首尾空格，这里不再strip
     return formatted_string
 
 
@@ -147,20 +156,8 @@ class TencentVideo(object):
         file_input = page.locator('input[type="file"]')
         await file_input.set_input_files(self.file_path)
 
-    async def upload_cover_image(self, page):
-        # 获取视频文件名（不含扩展名）
-        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
-        # 支持多种封面图片格式，按优先级顺序查找
-        exts = [".png", ".jpeg", ".jpg", ".webp"]
-        cover_path = None
-        for ext in exts:
-            candidate = os.path.join(os.path.dirname(self.file_path), f"{base_name}{ext}")
-            if os.path.exists(candidate):
-                cover_path = candidate
-                break
-        if not cover_path:
-            tencent_logger.info(f"未找到封面图片: {base_name}.[png/jpeg/jpg/webp]")
-            return
+    async def upload_cover(self, page: Page, cover_path: str): # 现在 Page 类型提示是有效的
+        """上传封面图"""
         try:
             # 等待"更换封面"按钮可点击（非灰色/非disabled），最多等待60秒
             btn_selector = 'div.finder-tag-wrap.btn .tag-inner:text("更换封面")'
@@ -183,6 +180,7 @@ class TencentVideo(object):
                 tencent_logger.warning("首次点击更换封面后未弹出弹窗，尝试再次点击...")
                 await btn.click()
                 await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
+            
             # 2. 上传封面图片
             input_elem = await page.query_selector('div.single-cover-uploader-wrap input[type="file"]')
             if input_elem is None:
@@ -190,58 +188,42 @@ class TencentVideo(object):
                 return
             await input_elem.set_input_files(cover_path)
             tencent_logger.info(f"已上传封面图片: {cover_path}")
-            # 3. 在所有可见弹窗内，遍历所有按钮，遇到"确认"按钮就点击（裁剪弹窗）
-            confirm_clicked = False
-            for wait_idx in range(30):  # 最多等待30秒
-                dialog_wrps = await page.query_selector_all('div.weui-desktop-dialog__wrp:not([style*="display: none"])')
-                for wrp in dialog_wrps:
-                    btns = await wrp.query_selector_all('button')
-                    btn_texts = []
-                    for btn in btns:
-                        try:
-                            text = await btn.inner_text()
-                        except Exception:
-                            text = ""
-                        btn_texts.append(text)
-                        if text.strip() == "确定":  # 裁剪弹窗的确认按钮通常为“确定”
-                            visible = await btn.is_visible()
-                            disabled = await btn.get_attribute('disabled')
-                            if visible and not disabled:
-                                await btn.click()
-                                tencent_logger.info("已点击裁剪弹窗确认按钮")
-                                await asyncio.sleep(1)
-                                confirm_clicked = True
-                                break
-                    tencent_logger.info(f"弹窗按钮: {btn_texts}")
-                    if confirm_clicked:
-                        break
-                if confirm_clicked:
-                    break
-                await asyncio.sleep(1)
-            else:
-                tencent_logger.error("未找到可见的裁剪弹窗确认按钮或按钮长时间不可用")
-                return
-            # 新增：处理悬浮层的“确认”按钮
-            for wait_idx in range(10):  # 最多等待10秒
-                dialog_wrps = await page.query_selector_all('div.weui-desktop-dialog__wrp:not([style*="display: none"])')
-                for wrp in dialog_wrps:
-                    btns = await wrp.query_selector_all('button')
-                    for btn in btns:
-                        try:
-                            text = await btn.inner_text()
-                        except Exception:
-                            text = ""
-                        if text.strip() == "确认":  # 悬浮层的确认按钮
-                            visible = await btn.is_visible()
-                            disabled = await btn.get_attribute('disabled')
-                            if visible and not disabled:
-                                await btn.click()
-                                tencent_logger.info("已点击悬浮层确认按钮")
-                                await asyncio.sleep(1)
-                                return
-                await asyncio.sleep(1)
-            tencent_logger.error("未找到悬浮层确认按钮")
-            return
+
+            # --- 修改开始 ---
+            # 3. 处理可能的裁剪弹窗 ("确定"按钮)
+            crop_confirm_selector = 'div.weui-desktop-dialog:has-text("裁剪封面图") button.weui-desktop-btn_primary:has-text("确定")'
+            try:
+                tencent_logger.info("  [-] 尝试查找并点击裁剪弹窗 '确定' 按钮 (超时5秒)...")
+                crop_button = page.locator(crop_confirm_selector).first 
+                await crop_button.click(timeout=5000) # 等待最多5秒让按钮可点击
+                tencent_logger.info("  [+] 已点击裁剪弹窗 '确定' 按钮。")
+                # 等待裁剪对话框消失
+                await crop_button.wait_for(state='hidden', timeout=5000) 
+            except TimeoutError:
+                tencent_logger.info("  [-] 未在5秒内找到或点击裁剪弹窗 '确定' 按钮 (可能尺寸标准或弹窗未出现)。继续...")
+            except Exception as e:
+                tencent_logger.warning(f"  [!] 点击裁剪弹窗 '确定' 按钮时发生错误: {e}。继续...")
+
+            # 4. 处理编辑视频封面悬浮层/最终确认弹窗的 "确认" 按钮
+            # 注意：这个选择器可能需要根据实际页面结构调整，确认按钮可能不在dialog里
+            final_confirm_selector = 'div.weui-desktop-dialog__wrp:not([style*="display: none"]) button:has-text("确认"), div.cover-control-wrap button:has-text("确认")' 
+            try:
+                tencent_logger.info("  [-] 尝试查找并点击最终 '确认' 按钮 (超时10秒)...")
+                # 使用 page.locator().or_() 来处理可能的不同确认按钮位置
+                final_button = page.locator(final_confirm_selector).first
+                await final_button.click(timeout=10000) # 等待最多10秒
+                tencent_logger.info("  [+] 已点击最终 '确认' 按钮。")
+                # 等待确认按钮所在的弹窗/控件消失或状态改变
+                await final_button.wait_for(state='hidden', timeout=5000)
+            except TimeoutError:
+                tencent_logger.error("  [!] 未在10秒内找到或点击最终 '确认' 按钮。封面可能未成功设置。")
+                # 这里可以选择返回或抛出异常，因为最终确认通常是必要的
+                # return # 如果确认失败则不继续后续发布步骤
+            except Exception as e:
+                tencent_logger.error(f"  [!] 点击最终 '确认' 按钮时发生错误: {e}")
+                # return # 出错也考虑不继续
+            # --- 修改结束 ---
+
         except Exception as e:
             tencent_logger.error(f"上传封面图片失败: {e}")
 
@@ -256,6 +238,28 @@ class TencentVideo(object):
             tencent_logger.info("已设置为不显示位置")
         except Exception as e:
             tencent_logger.error(f"设置不显示位置失败: {e}")
+
+    async def upload_cover_image(self, page):
+        """查找并上传封面图片"""
+        # 获取视频文件名（不含扩展名）
+        base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        # 支持多种封面图片格式，按优先级顺序查找
+        exts = [".png", ".jpeg", ".jpg", ".webp"]
+        cover_path = None
+        video_dir = os.path.dirname(self.file_path) # 获取视频文件所在目录
+        for ext in exts:
+            candidate = os.path.join(video_dir, f"{base_name}{ext}")
+            if os.path.exists(candidate):
+                cover_path = candidate
+                break # 找到第一个匹配的封面
+
+        if cover_path:
+            tencent_logger.info(f"  [-] 找到封面图，准备上传: {cover_path}")
+            # 调用实际执行上传页面操作的方法
+            await self.upload_cover(page, cover_path) 
+        else:
+            tencent_logger.info(f"  [-] 未找到与视频同名的封面图片: {base_name}.[png/jpeg/jpg/webp]，跳过封面上传。")
+            # 未找到封面，不执行任何上传操作
 
     async def upload(self, playwright: Playwright) -> None:
         # 使用 Chromium (这里使用系统内浏览器，用chromium 会造成h264错误
@@ -294,7 +298,7 @@ class TencentVideo(object):
         # 添加短标题
         await self.add_short_title(page)
         # 上传同名封面图片（放到最后，确保视频解析完成后再操作）
-        await self.upload_cover_image(page)
+        await self.upload_cover_image(page) # 现在这个调用是有效的
         # 点击发表
         await self.click_publish(page)
 
