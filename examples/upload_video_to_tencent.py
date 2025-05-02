@@ -112,3 +112,38 @@ if __name__ == '__main__':
             print(f"已移动到published文件夹: {file.name}")
         except Exception as e:
             print(f"上传失败未移动: {file.name}, 错误: {e}")
+
+
+async def add_original(self, page: Page):
+    """声明原创"""
+    try:
+        # 等待第一个复选框可见
+        original_checkbox = page.locator('.declare-original-checkbox .ant-checkbox-input')
+        await original_checkbox.wait_for(state="visible", timeout=5000)
+        
+        # 在点击之前确保页面稳定
+        await page.wait_for_timeout(1000)
+        await original_checkbox.click()
+        
+        # 等待弹窗出现，使用更精确的选择器
+        dialog = page.locator('.weui-desktop-dialog:has-text("原创权益")')
+        await dialog.wait_for(state="visible", timeout=5000)
+        
+        # 等待协议复选框可见并点击
+        agreement_checkbox = page.locator('.original-proto-wrapper .ant-checkbox-input')
+        await agreement_checkbox.wait_for(state="visible", timeout=5000)
+        await agreement_checkbox.click()
+        
+        # 等待确认按钮可用并点击
+        confirm_button = page.locator('.weui-desktop-dialog__ft .weui-desktop-btn_primary')
+        await confirm_button.wait_for(state="enabled", timeout=5000)
+        await confirm_button.click()
+        
+        # 确保弹窗已关闭
+        await dialog.wait_for(state="hidden", timeout=5000)
+        
+        print("原创声明流程完成")
+    except Exception as e:
+        print(f"原创声明过程出错: {e}")
+        # 可以选择是否继续上传流程
+        # raise e

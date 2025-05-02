@@ -131,7 +131,7 @@ def get_publish_date(config_path):
     return None
 
 
-def generate_schedule_times(start_date_str: str, daily_times: list[int], num_videos: int) -> list[datetime]:
+def generate_schedule_times(start_date_str: str, daily_times: list[str], num_videos: int) -> list[datetime]:
     """
     根据 config.json 中的起始日期和每日时间点生成发布时间列表。
 
@@ -161,22 +161,22 @@ def generate_schedule_times(start_date_str: str, daily_times: list[int], num_vid
             time_index = 0
             current_date += timedelta(days=1)
 
-        hour = daily_times[time_index]
+        time_str = daily_times[time_index]
         try:
-            if 0 <= hour <= 23:
-                 dt = datetime.combine(current_date, datetime.min.time().replace(hour=hour))
-                 schedule_times.append(dt)
+            hour, minute = map(int, time_str.split(':'))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                dt = datetime.combine(current_date, datetime.min.time().replace(hour=hour, minute=minute))
+                schedule_times.append(dt)
             else:
-                print(f"警告：config.json 中的时间 '{hour}' 无效，已跳过。小时应在 0 到 23 之间。")
+                print(f"警告：config.json 中的时间 '{time_str}' 无效，已跳过。小时应在 0 到 23 之间。")
                 default_hour = 12
                 dt = datetime.combine(current_date, datetime.min.time().replace(hour=default_hour))
                 schedule_times.append(dt)
-
         except ValueError as e:
-             print(f"警告：处理日期 {current_date} 和时间 {hour} 时出错: {e}。已跳过。")
-             default_hour = 12
-             dt = datetime.combine(current_date, datetime.min.time().replace(hour=default_hour))
-             schedule_times.append(dt)
+            print(f"警告：处理时间字符串 {time_str} 时出错: {e}。已跳过。")
+            default_hour = 12
+            dt = datetime.combine(current_date, datetime.min.time().replace(hour=default_hour))
+            schedule_times.append(dt)
 
         time_index += 1
 
