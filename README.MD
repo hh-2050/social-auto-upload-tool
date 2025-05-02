@@ -1,8 +1,6 @@
 # social-auto-upload
 social-auto-upload 该项目旨在自动化发布视频到各个社交媒体平台
 
-<img src="media/show/tkupload.gif" alt="tiktok show" width="800"/>
-
 ## 💡Feature
 - 中国主流社交媒体平台：
 
