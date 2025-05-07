@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import random
 from datetime import datetime
 
-from playwright.async_api import Playwright, async_playwright, Page
+from playwright.async_api import Playwright, async_playwright, Page # Add Page here
 import os
-import asyncio
 
 from conf import LOCAL_CHROME_PATH
 from utils.base_social_media import set_init_script
@@ -219,7 +219,7 @@ class BaiJiaHaoVideo(object):
                 raise  # 重新抛出异常，让重试装饰器捕获
 
     @async_retry(timeout=300)  # 例如，最多重试3次，超时时间为180秒
-    async def publish_video(self, page: Page, publish_date):
+    async def publish_video(self, page: Page, publish_date): # Page is used here
         if publish_date != 0:
             # 定时发布
             await self.set_schedule_publish(page, publish_date)

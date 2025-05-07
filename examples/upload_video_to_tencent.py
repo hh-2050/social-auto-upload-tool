@@ -6,6 +6,7 @@ import re
 import shutil
 import json
 from datetime import datetime
+from playwright.async_api import Page
 
 from conf import BASE_DIR
 # --- 修改开始 ---
@@ -23,20 +24,40 @@ def natural_key(s):
 if __name__ == '__main__':
     filepath = Path(BASE_DIR) / "videos"
     account_file = Path(BASE_DIR / "cookies" / "tencent_uploader" / "account.json")
-    # 获取视频目录
-    folder_path = Path(filepath)
+    
+    # 检查视频目录是否存在，不存在则创建
+    if not filepath.exists():
+        filepath.mkdir(parents=True, exist_ok=True)
+        print(f"已创建视频目录: {filepath}")
+    
     # 获取文件夹中的所有文件，并按自然顺序排序
-    files = sorted(folder_path.glob("*.mp4"), key=lambda x: natural_key(x.name))
+    files = sorted(filepath.glob("*.mp4"), key=lambda x: natural_key(x.name))
     file_num = len(files)
-
-    # --- 修改开始 ---
+    
+    # 检查是否有视频文件
+    if file_num == 0:
+        print("\n" + "="*50)
+        print("【提示】未找到任何视频文件！")
+        print(f"请将要上传的视频文件(.mp4格式)放在 {filepath} 目录中")
+        print("每个视频文件可以有对应的同名.txt文件，包含标题和标签")
+        print("如果没有对应的.txt文件，将使用视频文件名作为标题")
+        print("例如: video1.mp4 对应 video1.txt")
+        print("="*50 + "\n")
+        sys.exit(0)
+    
     # 读取 config.json 并生成发布时间
     config_path = Path(BASE_DIR) / "config.json"
     publish_datetimes = []
+    original_declaration = True  # 默认启用原创声明
+    
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-
+            
+        # 读取原创声明配置
+        if "original_declaration" in config:
+            original_declaration = config["original_declaration"]
+            
         # 主要逻辑：使用 config.json 中的 publish_date 和 publish_times
         if "publish_date" in config and "publish_times" in config:
             publish_date_str = config["publish_date"]
@@ -92,8 +113,13 @@ if __name__ == '__main__':
             file_path=str(file),
             publish_date=current_publish_time,
             account_file=str(account_file),
-            category=category
+            category=category,
+            original_declaration=original_declaration  # 传递原创声明配置
         )
+        
+        # 添加原创声明状态提示
+        print(f"原创声明状态：{'启用' if original_declaration else '禁用'}")
+        
         try:
             asyncio.run(app.main(), debug=False)
             # 上传成功后移动视频、封面图和txt

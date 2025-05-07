@@ -89,7 +89,7 @@ async def weixin_setup(account_file, handle=False):
 
 
 class TencentVideo(object):
-    def __init__(self, short_title, title_and_tags, file_path, publish_date: datetime, account_file, category=None):
+    def __init__(self, short_title, title_and_tags, file_path, publish_date: datetime, account_file, category=None, original_declaration=True):
         self.short_title = short_title  # 短标题
         self.title_and_tags = title_and_tags  # 标题和话题内容
         self.file_path = file_path
@@ -97,6 +97,7 @@ class TencentVideo(object):
         self.account_file = account_file
         self.category = category
         self.local_executable_path = LOCAL_CHROME_PATH
+        self.original_declaration = original_declaration  # 添加原创声明配置
 
     async def set_schedule_time_tencent(self, page, publish_date):
         label_element = page.locator("label").filter(has_text="定时").nth(1)
@@ -287,7 +288,13 @@ class TencentVideo(object):
         # 合集功能
         await self.add_collection(page)
         # 原创选择
-        await self.add_original(page)
+        if self.original_declaration:
+            print("开始执行原创声明流程...")
+            await self.add_original(page)
+            print("原创声明流程执行完成")
+        else:
+            print("已跳过原创声明流程（根据配置）")
+        
         # 设置不显示位置
         await self.set_no_location(page)
         # 默认定时发布：无论publish_date是否为0都定时，若为0则设为次日9点
@@ -367,29 +374,40 @@ class TencentVideo(object):
         # 默认不添加合集，直接跳过
         return
 
-    async def add_original(self, page):
-        if await page.get_by_label("视频为原创").count():
-            await page.get_by_label("视频为原创").check()
-        # 检查 "我已阅读并同意 《视频号原创声明使用条款》" 元素是否存在
-        label_locator = await page.locator('label:has-text("我已阅读并同意 《视频号原创声明使用条款》")').is_visible()
-        if label_locator:
-            await page.get_by_label("我已阅读并同意 《视频号原创声明使用条款》").check()
-            await page.get_by_role("button", name="声明原创").click()
-        # 2023年11月20日 wechat更新: 可能新账号或者改版账号，出现新的选择页面
-        if await page.locator('div.label span:has-text("声明原创")').count() and self.category:
-            # 因处罚无法勾选原创，故先判断是否可用
-            if not await page.locator('div.declare-original-checkbox input.ant-checkbox-input').is_disabled():
-                await page.locator('div.declare-original-checkbox input.ant-checkbox-input').click()
-                if not await page.locator(
-                        'div.declare-original-dialog label.ant-checkbox-wrapper.ant-checkbox-wrapper-checked:visible').count():
-                    await page.locator('div.declare-original-dialog input.ant-checkbox-input:visible').click()
-            if await page.locator('div.original-type-form > div.form-label:has-text("原创类型"):visible').count():
-                await page.locator('div.form-content:visible').click()  # 下拉菜单
-                await page.locator(
-                    f'div.form-content:visible ul.weui-desktop-dropdown__list li.weui-desktop-dropdown__list-ele:has-text("{self.category}")').first.click()
-                await page.wait_for_timeout(1000)
-            if await page.locator('button:has-text("声明原创"):visible').count():
-                await page.locator('button:has-text("声明原创"):visible').click()
+    async def add_original(self, page: Page):
+        """声明原创"""
+        try:
+            tencent_logger.info("开始原创声明流程...")
+            # 等待第一个复选框可见
+            original_checkbox = page.locator('.declare-original-checkbox .ant-checkbox-input')
+            await original_checkbox.wait_for(state="visible", timeout=10000)
+            tencent_logger.info("原创声明复选框可见，尝试点击...")
+            await original_checkbox.click(timeout=5000)
+            tencent_logger.info("已勾选原创声明复选框")
+            
+            dialog = page.locator('.weui-desktop-dialog:has-text("原创权益")').first
+            await dialog.wait_for(state="visible", timeout=10000)
+            tencent_logger.info("原创权益弹窗已出现")
+            
+            agreement_checkbox = dialog.locator('.original-proto-wrapper .ant-checkbox-input')
+            await agreement_checkbox.wait_for(state="visible", timeout=10000)
+            tencent_logger.info("原创声明协议复选框可见，尝试点击...")
+            await agreement_checkbox.click(timeout=5000)
+            tencent_logger.info("已同意原创声明协议")
+            
+            confirm_button = dialog.locator('.weui-desktop-dialog__ft .weui-desktop-btn_primary:has-text("声明原创")')
+            # 修改点：等待按钮可见，而不是“enabled”
+            await confirm_button.wait_for(state="visible", timeout=10000) 
+            tencent_logger.info("声明原创按钮可见，尝试点击...") # 更新日志信息
+            # .click() 会自动等待按钮可被点击 (包括 enabled)
+            await confirm_button.click(timeout=5000)
+            
+            await dialog.wait_for(state="hidden", timeout=10000)
+            
+            tencent_logger.success("原创声明流程完成")
+        except Exception as e:
+            tencent_logger.error(f"原创声明过程出错: {e}")
+            # raise e # 根据需要决定是否抛出异常
 
     async def main(self):
         async with async_playwright() as playwright:

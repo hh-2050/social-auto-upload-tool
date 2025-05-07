@@ -1,7 +1,10 @@
 {
-    "publish_date": "2024-05-03",
-    "publish_times": ["05:30", "08:30", "11:30"],
+    "publish_date": "2024-05-08",
+    "publish_times": [
+        "8:08", "8:18"
+    ],
     "timezone": "Asia/Shanghai",
     "video_dir": "videos",
-    "text_dir": "texts"
+    "text_dir": "texts",
+    "original_declaration": true
 }

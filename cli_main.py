@@ -45,12 +45,31 @@ async def main():
 
     # 解析命令行参数
     args = parser.parse_args()
-    # 参数校验
+    
+    # 检查视频文件和目录
     if args.action == 'upload':
-        if not exists(args.video_file):
-            raise FileNotFoundError(f'Could not find the video file at {args["video_file"]}')
+        video_file_path = Path(args.video_file)
+        
+        # 检查视频文件是否存在
+        if not video_file_path.exists():
+            print(f"错误：视频文件不存在 - {video_file_path}")
+            print("\n" + "="*50)
+            print("【提示】未找到指定的视频文件！")
+            print(f"请确保视频文件(.mp4格式)存在于指定路径")
+            print("每个视频文件需要有对应的同名.txt文件，包含标题和标签")
+            print("例如: video1.mp4 对应 video1.txt")
+            print("="*50 + "\n")
+            return
+            
+        # 检查对应的txt文件是否存在
+        txt_file = video_file_path.with_suffix('.txt')
+        if not txt_file.exists():
+            print(f"警告：未找到对应的文本文件 - {txt_file}")
+            print("视频标题和标签可能无法正确设置")
+            
+        # 参数校验
         if args.publish_type == 1 and not args.schedule:
-            parser.error("The schedule must must be specified for scheduled publishing.")
+            parser.error("定时发布必须指定发布时间 (--schedule)。")
 
     account_file = Path(BASE_DIR / "cookies" / f"{args.platform}_{args.account_name}.json")
     account_file.parent.mkdir(exist_ok=True)
@@ -85,8 +104,8 @@ async def main():
             app = TiktokVideo(title, video_file, tags, publish_date, account_file)
         elif args.platform == SOCIAL_MEDIA_TENCENT:
             await weixin_setup(account_file, handle=True)
-            category = TencentZoneTypes.LIFESTYLE.value  # 标记原创需要否则不需要传
-            app = TencentVideo(title, video_file, tags, publish_date, account_file, category)
+            category = TencentZoneTypes.LIFESTYLE.value
+            app = TencentVideo(title, video_file, tags, publish_date, account_file, category, original_declaration)
         elif args.platform == SOCIAL_MEDIA_KUAISHOU:
             await ks_setup(account_file, handle=True)
             app = KSVideo(title, video_file, tags, publish_date, account_file)
