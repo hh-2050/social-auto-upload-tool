@@ -93,10 +93,40 @@ social-auto-upload 该项目旨在自动化发布视频到各个社交媒体平�
    - 自动创建不存在的视频目录
 
 10. **腾讯视频号原创声明流程稳定性修复**:
-    - **问题1：定位“原创权益”弹窗严格模式冲突**
+    - **问题1：定位"原创权益"弹窗严格模式冲突**
         - **原因**: `page.locator('.weui-desktop-dialog:has-text("原创权益")')` 匹配到多个元素。
         - **解决**: 使用 `.first` 明确选择第一个匹配项，即 `page.locator('.weui-desktop-dialog:has-text("原创权益")').first`，并确保后续弹窗内元素定位基于此。
-    - **问题2：等待“声明原创”按钮状态参数错误**
+    - **问题2：等待"声明原创"按钮状态参数错误**
         - **原因**: `await confirm_button.wait_for(state="enabled", ...)` 中 `state="enabled"` 无效。
         - **解决**: 改为 `await confirm_button.wait_for(state="visible", ...)`，因为 `.click()` 方法会自动等待元素可用。同时优化了确认按钮的选择器为 `dialog.locator('.weui-desktop-dialog__ft .weui-desktop-btn_primary:has-text("声明原创")')`。
     - **效果**: 修复上述问题后，原创声明流程恢复正常，并解决了因此导致的后续页面操作（如设置不显示位置）超时的问题。
+
+---
+
+## 常见问题与解决方案
+
+### 腾讯视频号批量上传卡在封面上传弹窗/无法自动上传封面图片
+
+**现象：**
+- 自动化上传时，页面卡在"编辑视频封面"弹窗，未自动上传本地封面图片，也未自动点击"确认"按钮。
+- 日志报错：`上传封面图片失败: Cannot set input files to detached element`
+- 有时"发表"按钮也无法点击，提示被浮层遮挡。
+
+**原因分析：**
+- 腾讯视频号前端在弹窗出现后，会重建或移除 input[type="file"] 元素，导致 Playwright 之前获取的 input 节点失效（detached）。
+- 赋值 input 时节点已被移除，或页面未及时渲染，导致上传失败。
+
+**解决方法：**
+- 上传图片时，务必用 `locator('div.single-cover-uploader-wrap input[type="file"]')` 并加 `.set_input_files(...)`，Playwright 会自动等待 input 节点 attached，极大减少"detached element"问题。
+- 上传图片后适当等待页面渲染，再自动点击"确认"按钮。
+- 相关代码片段：
+
+```python
+input_locator = page.locator('div.single-cover-uploader-wrap input[type="file"]')
+await input_locator.wait_for(state="attached", timeout=5000)
+await input_locator.set_input_files(cover_path)
+```
+
+- 这样可以大幅提升封面上传的稳定性，自动化流程会顺利上传封面、点击确认并完成后续操作。
+
+---

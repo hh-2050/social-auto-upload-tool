@@ -157,13 +157,11 @@ class TencentVideo(object):
         file_input = page.locator('input[type="file"]')
         await file_input.set_input_files(self.file_path)
 
-    async def upload_cover(self, page: Page, cover_path: str): # 现在 Page 类型提示是有效的
-        """上传封面图"""
+    async def upload_cover(self, page: Page, cover_path: str):
         try:
-            # 等待"更换封面"按钮可点击（非灰色/非disabled），最多等待60秒
+            # 1. 等待并点击"更换封面"按钮
             btn_selector = 'div.finder-tag-wrap.btn .tag-inner:text("更换封面")'
-            max_wait = 60
-            for i in range(max_wait):
+            for _ in range(60):
                 btn = await page.query_selector(btn_selector)
                 if btn:
                     btn_class = await btn.evaluate('el => el.parentElement.className')
@@ -173,60 +171,37 @@ class TencentVideo(object):
             else:
                 tencent_logger.error("更换封面按钮长时间不可用，放弃上传封面")
                 return
-            # 1. 点击"更换封面"按钮
             await btn.click()
-            try:
-                await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
-            except Exception:
-                tencent_logger.warning("首次点击更换封面后未弹出弹窗，尝试再次点击...")
-                await btn.click()
-                await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
-            
-            # 2. 上传封面图片
-            input_elem = await page.query_selector('div.single-cover-uploader-wrap input[type="file"]')
-            if input_elem is None:
-                tencent_logger.error("未找到用于封面的文件选择框")
-                return
-            await input_elem.set_input_files(cover_path)
+            await page.wait_for_selector('div.cover-control-wrap', timeout=10000)
+
+            # 2. 上传封面图片（用 locator 并等待 attached）
+            input_locator = page.locator('div.single-cover-uploader-wrap input[type="file"]')
+            await input_locator.wait_for(state="attached", timeout=5000)
+            await input_locator.set_input_files(cover_path)
             tencent_logger.info(f"已上传封面图片: {cover_path}")
+            await page.screenshot(path="cover_uploaded.png")
 
-            # --- 修改开始 ---
-            # 3. 处理可能的裁剪弹窗 ("确定"按钮)
-            crop_confirm_selector = 'div.weui-desktop-dialog:has-text("裁剪封面图") button.weui-desktop-btn_primary:has-text("确定")'
+            # 3. 等待图片预览区域变化（可选，增强健壮性）
+            await page.wait_for_timeout(2000)  # 等2秒让图片加载
+
+            # 4. 自动点击"确认"按钮
+            confirm_selector = 'button:has-text("确认")'
             try:
-                tencent_logger.info("  [-] 尝试查找并点击裁剪弹窗 '确定' 按钮 (超时5秒)...")
-                crop_button = page.locator(crop_confirm_selector).first 
-                await crop_button.click(timeout=5000) # 等待最多5秒让按钮可点击
-                tencent_logger.info("  [+] 已点击裁剪弹窗 '确定' 按钮。")
-                # 等待裁剪对话框消失
-                await crop_button.wait_for(state='hidden', timeout=5000) 
-            except TimeoutError:
-                tencent_logger.info("  [-] 未在5秒内找到或点击裁剪弹窗 '确定' 按钮 (可能尺寸标准或弹窗未出现)。继续...")
+                await page.wait_for_selector(confirm_selector, timeout=8000)
+                confirm_buttons = await page.query_selector_all(confirm_selector)
+                for btn in confirm_buttons:
+                    if await btn.is_visible():
+                        await btn.click()
+                        tencent_logger.info("已点击最终 '确认' 按钮")
+                        await page.screenshot(path="after_final_confirm.png")
+                        break
             except Exception as e:
-                tencent_logger.warning(f"  [!] 点击裁剪弹窗 '确定' 按钮时发生错误: {e}。继续...")
+                tencent_logger.warning(f"查找或点击最终 '确认' 按钮失败: {e}")
 
-            # 4. 处理编辑视频封面悬浮层/最终确认弹窗的 "确认" 按钮
-            # 注意：这个选择器可能需要根据实际页面结构调整，确认按钮可能不在dialog里
-            final_confirm_selector = 'div.weui-desktop-dialog__wrp:not([style*="display: none"]) button:has-text("确认"), div.cover-control-wrap button:has-text("确认")' 
-            try:
-                tencent_logger.info("  [-] 尝试查找并点击最终 '确认' 按钮 (超时10秒)...")
-                # 使用 page.locator().or_() 来处理可能的不同确认按钮位置
-                final_button = page.locator(final_confirm_selector).first
-                await final_button.click(timeout=10000) # 等待最多10秒
-                tencent_logger.info("  [+] 已点击最终 '确认' 按钮。")
-                # 等待确认按钮所在的弹窗/控件消失或状态改变
-                await final_button.wait_for(state='hidden', timeout=5000)
-            except TimeoutError:
-                tencent_logger.error("  [!] 未在10秒内找到或点击最终 '确认' 按钮。封面可能未成功设置。")
-                # 这里可以选择返回或抛出异常，因为最终确认通常是必要的
-                # return # 如果确认失败则不继续后续发布步骤
-            except Exception as e:
-                tencent_logger.error(f"  [!] 点击最终 '确认' 按钮时发生错误: {e}")
-                # return # 出错也考虑不继续
-            # --- 修改结束 ---
-
+            await asyncio.sleep(2)  # 等待页面反应
         except Exception as e:
             tencent_logger.error(f"上传封面图片失败: {e}")
+            await page.screenshot(path="cover_upload_error.png")
 
     async def set_no_location(self, page):
         try:
@@ -396,7 +371,7 @@ class TencentVideo(object):
             tencent_logger.info("已同意原创声明协议")
             
             confirm_button = dialog.locator('.weui-desktop-dialog__ft .weui-desktop-btn_primary:has-text("声明原创")')
-            # 修改点：等待按钮可见，而不是“enabled”
+            # 修改点：等待按钮可见，而不是"enabled"
             await confirm_button.wait_for(state="visible", timeout=10000) 
             tencent_logger.info("声明原创按钮可见，尝试点击...") # 更新日志信息
             # .click() 会自动等待按钮可被点击 (包括 enabled)
