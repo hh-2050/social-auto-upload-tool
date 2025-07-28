@@ -1,0 +1,9 @@
+{
+    "publish_date": "2024-05-19",
+    "publish_times": ["01:00", "5:00", "9:00", "13:00", "17:00", "21:00"],
+    "timezone": "Asia/Shanghai",
+    "video_dir": "videos",
+    "text_dir": "texts",
+    "original_declaration": false,
+    "cover_position": "top"
+}
